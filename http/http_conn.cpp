@@ -4,24 +4,24 @@
 
 
 char* get_line(){
-    return m_read_buf + m_start_line;
+    return m_read_buf + m_finished_num;
 }
 
 
 
 bool http_conn::read_once(){
-    if(m_read_idx >= READ_BUFFER_SIZE) return false;
+    if(m_read_length >= READ_BUFFER_SIZE) return false;
 
     int bytes_read = 0;
     while(true){
-        bytes_read = recv(m_sockfd, m_read_buf + m_read_idx, READ_BUFFER_SIZE - m_read_idx, 0);
+        bytes_read = recv(m_sockfd, m_read_buf + m_read_length, READ_BUFFER_SIZE - m_read_length, 0);
         if(bytes_read == -1){
             if(errno == EAGAIN || errno == EWOULDBLOCK) break;
             return false;
         }
         else if(bytes_read == 0) return false;
 
-        m_read_idx += bytes_read;
+        m_read_length += bytes_read;
     }
 
     return true;
@@ -108,5 +108,89 @@ http_conn::HTTP_CODE http_conn::process_read(){
         default: return INTERNAL_ERROR;
     }
 
+    return NO_REQUEST;
+}
+
+void addfd(int epollfd, int fd, bool one_shot){
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+    if(one_shot) event.events |= EPOLLONESHOT;
+    epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
+    setnonblocking(fd);
+}
+
+
+void http_conn::init(int sockfd, sockaddr_in &addr){
+    m_sockfd = sockfd;
+    m_address = addr;
+
+    addfd(m_epollfd, sockfd, true);
+    m_user_count++;
+    init();
+}
+
+
+void http_conn::init(){
+    mysql = NULL;
+    bytes_to_send = 0;
+    bytes_have_send = 0;
+    m_check_state = CHECK_STATE_REQUESTLINE;
+    m_linger = false;
+    m_method = GET;
+    m_url = 0;
+    m_version = 0;
+    m_content_length = 0;
+    m_host = 0;
+    m_finished_num = 0;
+    m_curret_idx = 0;
+    m_read_length = 0;
+    m_write_idx = 0;
+    cgi = 0;
+    
+    memset(m_read_buf, '\0', READ_BUFFER_SIZE);
+    memset(m_write_buf, '\0', WRITE_BUFFER_SIZE);
+    memset(m_file, '\0', FILENAME_LEN);
+}
+
+http_conn::HTTP_CODE http_conn::parse_request_line(char* text){
+    m_url = strpbrk(text, " \t");
+
+    if(!m_url) return BAD_REQUEST;
+
+    *m_url++='\0';
+
+    char* method = text;
+    if(strcasecmp(method, "GET") == 0) m_method = GET;
+    else if(strcasecmp(method, "POST") == 0){
+        m_method = POST;
+        cgi = 1;
+    }
+    else return BAD_REQUEST;
+
+    m_url += strspn(m_url, " \t");
+    
+    m_version = strpbrk(m_url, " \t");
+    if(!m_version) return BAD_REQUEST;
+    *m_version++ = '\0';
+    m_version += strspn(m_version, " \t");
+
+    if(strcasecmp(m_verison, "HTTP/1.1") != 0) return BAD_REQUEST;
+
+    if(strncasecmp(m_url, "https://", 7) == 0){
+        m_url += 7;
+        m_url = strchr(m_url, '/');
+    }
+
+    if(strncasecmp(m_url, "https://", 8) == 0){
+        m_url += 8;
+        m_url = strchr(m_url, '/');
+    }
+
+    if(!m_url || m_url[0] != '/') return BAD_REQUEST;
+
+    if(strlen(m_url) == 1) strcat(m_url, "judge.html");
+    
+    m_check_state = CHECK_STATE_HEADER;
     return NO_REQUEST;
 }

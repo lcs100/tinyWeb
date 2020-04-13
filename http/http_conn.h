@@ -18,7 +18,10 @@
 #include <sys/mman.h>
 #include <stdarg.h>
 #include <errno.h>
-
+#include <sys/wait.h>
+#include <sys/uio.h>
+#include "../lock/locker.h"
+#include "../CGImysql/sql_connection_pool.h"
 
 class http_conn {
     public:
@@ -54,7 +57,7 @@ class http_conn {
         HTTP_CODE parse_content(char* text);
         HTTP_CODE do_request();
 
-        char* get_line(){ return m_read_buf + m_start_line; }
+        char* get_line(){ return m_read_buf + m_finished_num; }
 
         LINE_STATUS parse_line();
         void unmap();
@@ -71,15 +74,16 @@ class http_conn {
     public:
         static int m_epollfd;
         static int m_user_count;
+        MYSQL* mysql;
 
     private:
         int m_sockfd;
         sockaddr_in m_address;
 
         char m_read_buf[READ_BUFFER_SIZE];
-        int m_read_idx;
+        int m_read_length;
         int m_curret_idx;
-        int m__line;
+        int m_finished_num;
 
         char m_write_buf[WRITE_BUFFER_SIZE];
         int m_write_idx;
@@ -87,7 +91,7 @@ class http_conn {
         CHECK_STATE m_check_state;
         METHOD m_method;
 
-        char m_real_file[FILENAME_LEN];
+        char m_file[FILENAME_LEN];
         char* m_url;
         char* m_version;
         char* m_host;
