@@ -77,9 +77,9 @@ class http_conn {
         sockaddr_in m_address;
 
         char m_read_buf[READ_BUFFER_SIZE];
-        int m_Read_idx;
-        int m_checked_idx;
-        int m_start_line;
+        int m_read_idx;
+        int m_curret_idx;
+        int m__line;
 
         char m_write_buf[WRITE_BUFFER_SIZE];
         int m_write_idx;
@@ -100,8 +100,10 @@ class http_conn {
         int m_iv_count;
         int cgi;
         char* m_string;
-}
 
+        int bytes_to_send;
+        int bytes_have_send;
+}
 
 
 #endif
