@@ -1,7 +1,20 @@
 #include "http_conn.h"
 #include "../log/log.h"
+#include <map>
 
 
+
+const char* doc_root = "/home/lcs100/tinyWeb/root";
+const char* error_400_title = "Bad Request";
+const char* error_400_form = "Your request has bad syntax or is inherently impossible to satisfy.\n";
+const char* error_403_title = "Forbidden";
+const char* error_403_form = "You do not have permission to get file from this server.\n";
+const char* error_404_title = "Not Found";
+const char* error_404_form = "The requested file was not found on this server.\n";
+const char* error_500_title = "Internal Error";
+const char* error_500_form = "There was an unusual problem serving the request file.\n";
+
+unorderd_map<string, string> users;
 
 char* get_line(){
     return m_read_buf + m_finished_num;
@@ -26,6 +39,65 @@ bool http_conn::read_once(){
 
     return true;
 }
+
+bool http_conn::add_response(const char* format, ...){
+    if(m_write_idx >= WRITE_BUFFER_SIZE) return false;
+
+    va_list arg_list;
+    
+    va_start(arg_list, format);
+
+    int len = vsnprintf(m_write_buf + m_write_idx, WRITE_BUFFER_SIZE - 1 - m_write_idx, format, arg_list);
+
+    if(len >= (WRITE_BUFFER_SIZE - 1 - m_write_idx)){
+        va_end(arg_list);
+        return false;
+    }
+    
+    m_write_idx += len;
+    va_end(arg_list);
+
+    return true;
+}
+
+
+bool http_conn::add_status_line(int status, const char* title){
+    return add_response("%s %d %s\r\n", "HTTP/1.1", status, title);
+}
+
+bool http_conn::add_headers(int content_len){
+    add_content_length(content_len);
+    add_linger();
+    add_blank_line();
+}
+
+bool http_conn::add_content_length(int content_len){
+    return add_response("Content-Length:%d\r\n", content_len);
+}
+
+bool http_conn::add_content_type(){
+    return add_response("Content-Type:%s\r\n", "text/html");
+}
+
+bool http_conn::add_linger(){
+    return add_response("Connection:%s\r\n", (,_linger == true)?"keep-alive":"close");
+}
+
+
+
+
+bool http_conn::process_write(HTTP_CODE ret){
+    switch(ret){
+        case INTERNAL_ERROR:{
+            add_status_line(500, error_500_title);
+            add_headers(strlen(error_500_form));
+            if( !add_content(error_500_form)) return false;
+            break;
+        }
+        case 
+    }
+}
+
 
 void http_conn::process(){
     HTTP_CODE read_ret = process_read();
@@ -70,6 +142,81 @@ http_conn::LINE_STATUS http_conn::parse_line(){
     return LINE_OPEN;
 }
 
+http_conn::HTTP_CODE http_conn::parse_headers(char* text){
+    if(text[0] == '\0'){
+        if(m_content_length != 0){
+            m_check_state = CHECK_STATE_CONTENT;
+            return NO_REQUEST;
+        }
+        return GET_REQUEST;
+    }
+    else if(strncasecmp(text, "Connection:", 11) == 0){
+        text += 11;
+        text += strspn(text, " \t");
+        if(strcasecmp(text, "keep-alive") == 0) m_linger = true;
+    }
+    else if(strncasecmp(text, "Content-length:", 15) == 0){
+        text += 15;
+        text += strspn(text, " \t");
+        m_content_length = atol(text);
+    }
+    else if(strncasecmp(text, "Host:", 5) == 0){
+        text += 5;
+        text += strspn(text, " \t");
+        m_host = text;
+    }
+    else cout << "oop! unknown header: " << text << endl;
+    return NO_REQUEST;
+}
+
+http_conn::HTTP_CODE http_conn::parse_content(char* text){
+    if(m_read_length >= (m_content_length + m_curret_idx)){
+        text[m_content_length] = '\0';
+        m_string = text;
+        return GET_REQUEST;
+    }
+    return NO_REQUEST;
+}
+
+http_conn::HTTP_CODE http_conn::do_request(){
+    strcpy(m_file, doc_root);
+    int len = strlen(doc_root);
+    const char* p = strrchr(m_url, '/');
+
+    if(cgi == 1 && (*(p+1) == '2' || *(p+1) == '3')){
+        //
+    }
+
+    if(*(p+1) == '0'){
+        char* m_url_real = (char*)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/register.html");
+
+        strncpy(m_file + len, m_url_real, strlen(m_url_real));
+
+        free(m_url_real);
+    }
+    else if( *(p+1) == '1'){
+        char* m_url_real = (char*)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/log.html");
+
+        strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
+        free(m_url_real);
+    }
+    else strncpy(m_real_file + len, m_url, FILENAME_LEN - len - 1);
+
+    if(stat(m_real_file, &m_file_stat) < 0) return NO_REQUEST;
+
+    if(!(m_file_stat.st_mode & S_IROTH)) return FORBIDDEN_REQUEST;
+    if(S_ISDIR(m_file_stat.st_mode)) return BAD_REQUEST;
+
+    int fd = open(m_real_file, O_RDONLY);
+    m_file_address = (char*)mmap(0, m_file_stat.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+
+    close(fd);
+
+    return FILE_REQUEST;
+}
+
 
 http_conn::HTTP_CODE http_conn::process_read(){
 
@@ -79,34 +226,37 @@ http_conn::HTTP_CODE http_conn::process_read(){
     char* text = 0;
 
     while((m_check_state == CHECK_STATE_CONTENT && line_status == LINE_OK) || ((line_status == parse_line()) == LINE_OK)){
-        
+        LINE_STATUS line_status = LINE_OK;
+        HTTP_CODE ret = NO_REQUEST;
+        char* text = 0;
 
+        text = get_line();
+        m_finished_num = m_curret_idx;
+        LOG_INFO("%s", text);
+        Log::get_instance()->flush();
+            switch(m_check_state){
+                case CHECK_STATE_REQUESTLINE: {
+                    ret = parse_request_line(text);
+                    if(ret == BAD_REQUEST) return BAD_REQUEST;
+                    break;
+                }
+                case CHECK_STATE_HEADER: {
+                    ret = parse_headers(text);
+                    if(ret == BAD_REQUEST) return BAD_REQUEST;
+                    else if( ret == GET_REQUEST) return do_request();
+                    break;
+                }
+                case CHECK_STATE_CONTENT: {
+                    ret = parse_content(text);
 
+                    if( ret == GET_REQUEST) return do_request();
 
-    }
-
-    switch(m_check_state){
-        case CHECK_STATE_REQUESTLINE: {
-            ret = parse_request_line(text);
-            if(ret == BAD_REQUEST) return BAD_REQUEST;
-            break;
+                    line_status = LINE_OPEN;
+                    break;
+                }
+                default: return INTERNAL_ERROR;
+            }
         }
-        case CHECK_STATE_HEADER: {
-            ret = parse_headers(text);
-            if(ret == BAD_REQUEST) return BAD_REQUEST;
-            else if( ret == GET_REQUEST) return do_request();
-            break;
-        }
-        case CHECK_STATE_CONTENT: {
-            ret = parse_content(text);
-
-            if( ret == GET_REQUEST) return do_request();
-
-            line_status = LINE_OPEN;
-            break;
-        }
-        default: return INTERNAL_ERROR;
-    }
 
     return NO_REQUEST;
 }
