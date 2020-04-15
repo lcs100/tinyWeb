@@ -5,6 +5,8 @@
 
 
 const char* doc_root = "/home/lcs100/tinyWeb/root";
+
+const char* ok_200_title = "OK";
 const char* error_400_title = "Bad Request";
 const char* error_400_form = "Your request has bad syntax or is inherently impossible to satisfy.\n";
 const char* error_403_title = "Forbidden";
@@ -14,7 +16,7 @@ const char* error_404_form = "The requested file was not found on this server.\n
 const char* error_500_title = "Internal Error";
 const char* error_500_form = "There was an unusual problem serving the request file.\n";
 
-unorderd_map<string, string> users;
+unordered_map<string, string> users;
 
 char* get_line(){
     return m_read_buf + m_finished_num;
@@ -80,21 +82,48 @@ bool http_conn::add_content_type(){
 }
 
 bool http_conn::add_linger(){
-    return add_response("Connection:%s\r\n", (,_linger == true)?"keep-alive":"close");
+    return add_response("Connection:%s\r\n", (m_linger == true)?"keep-alive":"close");
 }
 
+bool http_conn::add_blank_line(){
+    return add_response("%s", "\r\n");
+}
 
-
+bool http_conn::add_content(const char* content){
+    return add_response("%s", content);
+}
 
 bool http_conn::process_write(HTTP_CODE ret){
     switch(ret){
-        case INTERNAL_ERROR:{
+        case INTERNAL_ERROR: {
             add_status_line(500, error_500_title);
             add_headers(strlen(error_500_form));
             if( !add_content(error_500_form)) return false;
             break;
         }
-        case 
+        case BAD_REQUEST: {
+            add_status_line(404, error_404_title);
+            add_headers(strlen(error_404_form));
+            if(!add_content(error_404_form)) return false;
+            break;
+        }
+        case FORBIDDEN_REQUEST: {
+            add_status_line(403, error_403_title);
+            add_headers(strlen(error_403_form));
+            if(!add_content(error_403_form)) return false;
+            break;
+        }
+        case FILE_REQUEST:{
+            add_status_line(200, ok_200_title);
+            if(m_file_stat.st_size != 0){
+                add_headers(m_file_stat.st_size);
+                m_iv[0].iov_base = m_write_buf;
+                m_iv[0].iov_len = m_write_idx;
+                m_iv[1].iov_base = m_file_address;
+                m_iv[1].iov_len = m_file_stat.st_size;
+                m_iv_co
+            }
+        }
     }
 }
 
