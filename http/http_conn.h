@@ -102,6 +102,7 @@ class http_conn {
         struct stat m_file_stat;
         struct iovec m_iv[2];
         int m_iv_count;
+
         int cgi;
         char* m_string;
 

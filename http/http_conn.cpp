@@ -121,12 +121,81 @@ bool http_conn::process_write(HTTP_CODE ret){
                 m_iv[0].iov_len = m_write_idx;
                 m_iv[1].iov_base = m_file_address;
                 m_iv[1].iov_len = m_file_stat.st_size;
-                m_iv_co
+                m_iv_count = 2;
+                return true;
+            }
+            else {
+                const char* ok_string = "<html><body></body></html>";
+                add_headers(strlen(ok_string));
+                if(!add_content(ok_string)) return false;
+            }
+        }
+        default: return false;
+    }
+    m_iv[0].iov_base = m_write_buf;
+    m_iv[0].iov_len = m_write_idx;
+    m_iv_count = 1;
+    return true;
+}
+
+void http_conn::unmap(){
+    if(m_file_address){
+        munmap(m_file_address, m_file_stat.st_size);
+        m_file_address = 0;
+    }
+}
+
+bool http_conn::write(){
+    int tmp = 0;
+
+    int newadd = 0;
+    
+    if(bytes_to_send == 0){
+        modfd(m_epollfd, m_sockfd, EPOLLIN);
+        init();
+        return true;
+    }
+
+    while(1){
+        tmp = writev(m_sockfd, m_iv, m_iv_count);
+
+        if(tmp > 0){
+            bytes_have_send += tmp;
+            newadd = bytes_have_send - m_write_idx;
+        }
+        if(tmp <= -1){
+            if(errno == EAGAIN){
+                if(bytes_have_send >= m_iv[0].iov_len){
+                    m_iv[0].iov_len = 0;
+                    m_iv[1].iov_base = m_file_address + newadd;
+                    m_iv[1].iov_len = bytes_to_send;
+                }
+                else {
+                    m_iv[0].iov_base = m_write_buf + bytes_to_send;
+                    m_iv[0].iov_len = m_iv[0].iov_len - bytes_have_send;
+                }
+                modfd(m_epollfd, m_sockfd, EPOLLOUT);
+                return true;
+            }
+            unmap();
+            return false;
+        }
+        
+        bytes_to_send -= tmp;
+        if(bytes_to_send <= 0){
+            unmap();
+            if(m_linger){
+                init();
+                modfd(m_epollfd, m_sockfd, EPOLLIN);
+                return true;
+            }
+            else {
+                modfd(m_epollfd, m_sockfd, EPOLLIN);
+                return false;
             }
         }
     }
 }
-
 
 void http_conn::process(){
     HTTP_CODE read_ret = process_read();
